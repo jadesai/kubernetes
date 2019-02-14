@@ -10005,6 +10005,16 @@ type PublicIPAddressPropertiesFormat struct {
 	ResourceGUID *string `json:"resourceGuid,omitempty"`
 	// ProvisioningState - The provisioning state of the PublicIP resource. Possible values are: 'Updating', 'Deleting', and 'Failed'.
 	ProvisioningState *string `json:"provisioningState,omitempty"`
+	// IPTags - The list of IP tags associated with this PublicIP resource.
+	IPTags *[]IpTag `json:"ipTags,omitempty"`
+}
+
+type IPTag struct
+{
+	// IPTagType - The type identifier of the tag.
+	IPTagType *string `json:"ipTagType,omitempty"`
+	// Tag - The value of the tag.
+	Tag *string `json:"tag,omitempty"`
 }
 
 // PublicIPAddressSku SKU of a public IP address

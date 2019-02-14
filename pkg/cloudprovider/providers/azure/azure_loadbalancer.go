@@ -57,6 +57,12 @@ const (
 	// Azure load balancer auto selection from the availability sets
 	ServiceAnnotationLoadBalancerAutoModeValue = "__auto__"
 
+	// ServiceAnnotationLoadBalancerNameValue is the annotation used to specify the name of the
+	// Azure load balancer resource.
+	// This inherently is used to create Service IPs in the format %s-%s-%s-%s with
+	// ClusterName-LoadBalancerName-ServiceNamespace-ServiceName.
+	ServiceAnnotationLoadBalancerNameValue = "service.beta.kubernetes.io/azure-load-balancer-name"
+
 	// ServiceAnnotationDNSLabelName is the annotation used on the service
 	// to specify the DNS label name for the service.
 	ServiceAnnotationDNSLabelName = "service.beta.kubernetes.io/azure-dns-label-name"
@@ -108,6 +114,13 @@ func (az *Cloud) GetLoadBalancer(ctx context.Context, clusterName string, servic
 }
 
 func getPublicIPDomainNameLabel(service *v1.Service) string {
+	if labelName, found := service.Annotations[ServiceAnnotationDNSLabelName]; found {
+		return labelName
+	}
+	return ""
+}
+
+func getPublicIPTags(service *v1.Service) string {
 	if labelName, found := service.Annotations[ServiceAnnotationDNSLabelName]; found {
 		return labelName
 	}
@@ -216,6 +229,11 @@ func (az *Cloud) EnsureLoadBalancerDeleted(ctx context.Context, clusterName stri
 // GetLoadBalancerName returns the LoadBalancer name.
 func (az *Cloud) GetLoadBalancerName(ctx context.Context, clusterName string, service *v1.Service) string {
 	// TODO: replace DefaultLoadBalancerName to generate more meaningful loadbalancer names.
+
+	if loadBalancerName, found := service.Annotations[ServiceAnnotationLoadBalancerNameValue]; found {
+		return fmt.Sprintf("%s-%s-%s-%s", clusterName, loadBalancerName, service.Namespace, service.Name)
+	}
+
 	return cloudprovider.DefaultLoadBalancerName(service)
 }
 
@@ -465,7 +483,7 @@ func (az *Cloud) findServiceIPAddress(ctx context.Context, clusterName string, s
 	return lbStatus.Ingress[0].IP, nil
 }
 
-func (az *Cloud) ensurePublicIPExists(service *v1.Service, pipName string, domainNameLabel string) (*network.PublicIPAddress, error) {
+func (az *Cloud) ensurePublicIPExists(service *v1.Service, pipName string) (*network.PublicIPAddress, error) {
 	pipResourceGroup := az.getPublicIPAddressResourceGroup(service)
 	pip, existsPip, err := az.getPublicIPAddress(pipResourceGroup, pipName)
 	if err != nil {
@@ -476,6 +494,8 @@ func (az *Cloud) ensurePublicIPExists(service *v1.Service, pipName string, domai
 	}
 
 	serviceName := getServiceName(service)
+	domainNameLabel := getPublicIPDomainNameLabel(service)
+	ipTags := getPublicIPTags(service)
 	pip.Name = to.StringPtr(pipName)
 	pip.Location = to.StringPtr(az.Location)
 	pip.PublicIPAddressPropertiesFormat = &network.PublicIPAddressPropertiesFormat{
@@ -486,6 +506,10 @@ func (az *Cloud) ensurePublicIPExists(service *v1.Service, pipName string, domai
 			DomainNameLabel: &domainNameLabel,
 		}
 	}
+	if len(ipTags) > 0 {
+		pip.PublicIPAddressPropertiesFormat.IpTags = ipTags
+	}
+
 	pip.Tags = map[string]*string{"service": &serviceName}
 	if az.useStandardLoadBalancer() {
 		pip.Sku = &network.PublicIPAddressSku{
@@ -710,8 +734,7 @@ func (az *Cloud) reconcileLoadBalancer(clusterName string, service *v1.Service, 
 				if err != nil {
 					return nil, err
 				}
-				domainNameLabel := getPublicIPDomainNameLabel(service)
-				pip, err := az.ensurePublicIPExists(service, pipName, domainNameLabel)
+				pip, err := az.ensurePublicIPExists(service, pipName)
 				if err != nil {
 					return nil, err
 				}
@@ -1376,7 +1399,6 @@ func (az *Cloud) reconcilePublicIP(clusterName string, service *v1.Service, lb *
 	if !isInternal && wantLb {
 		// Confirm desired public ip resource exists
 		var pip *network.PublicIPAddress
-		domainNameLabel := getPublicIPDomainNameLabel(service)
 		if pip, err = az.ensurePublicIPExists(service, desiredPipName, domainNameLabel); err != nil {
 			return nil, err
 		}
